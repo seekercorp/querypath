@@ -1,57 +1,51 @@
-"""Aggregation functions for querypath query results."""
-from typing import Any, Dict, List, Optional
+from typing import Any
 
 
-SUPPORTED_FUNCS = ("COUNT", "SUM", "AVG", "MIN", "MAX")
+def apply_aggregation(groups: dict[tuple, list[dict]], agg_fields: list[dict]) -> list[dict]:
+    """
+    Collapse each group into a single summary row.
+    agg_fields: list of {"func": "COUNT", "field": "*", "alias": "count"}
+    """
+    result = []
+    for key, rows in groups.items():
+        row: dict[str, Any] = {}
+        for agg in agg_fields:
+            func = agg.get("func", "").upper()
+            field = agg.get("field", "*")
+            alias = agg.get("alias") or f"{func}({field})"
+            row[alias] = _compute(rows, f"{func}({field})")
+        result.append(row)
+    return result
 
 
-def apply_aggregation(
-    records: List[Dict[str, Any]],
-    agg_func: str,
-    agg_field: Optional[str],
-    group_by: Optional[str] = None,
-) -> List[Dict[str, Any]]:
-    """Apply an aggregation function to records, optionally grouped."""
-    func = agg_func.upper()
-    if func not in SUPPORTED_FUNCS:
-        raise ValueError(f"Unsupported aggregation function: {agg_func}")
+def _compute(rows: list[dict], expr: str) -> Any:
+    """Evaluate a single aggregation expression like COUNT(*) or SUM(salary)."""
+    expr = expr.strip()
+    upper = expr.upper()
 
-    if group_by:
-        groups: Dict[Any, List[Dict]] = {}
-        for rec in records:
-            key = rec.get(group_by)
-            groups.setdefault(key, []).append(rec)
-        return [
-            {group_by: key, f"{func}({agg_field})": _compute(func, agg_field, rows)}
-            for key, rows in groups.items()
-        ]
+    if upper.startswith("COUNT("):
+        field = expr[6:-1].strip()
+        if field == "*":
+            return len(rows)
+        return sum(1 for r in rows if r.get(field) is not None)
 
-    result = _compute(func, agg_field, records)
-    label = f"{func}({agg_field})" if agg_field else f"{func}(*)"
-    return [{label: result}]
+    if upper.startswith("SUM("):
+        field = expr[4:-1].strip()
+        return sum(r.get(field, 0) or 0 for r in rows)
 
+    if upper.startswith("AVG("):
+        field = expr[4:-1].strip()
+        vals = [r.get(field) for r in rows if r.get(field) is not None]
+        return sum(vals) / len(vals) if vals else None
 
-def _compute(func: str, field: Optional[str], records: List[Dict[str, Any]]) -> Any:
-    if func == "COUNT":
-        return len(records)
+    if upper.startswith("MIN("):
+        field = expr[4:-1].strip()
+        vals = [r.get(field) for r in rows if r.get(field) is not None]
+        return min(vals) if vals else None
 
-    values = []
-    for rec in records:
-        val = rec.get(field)
-        if val is not None:
-            try:
-                values.append(float(val))
-            except (TypeError, ValueError):
-                pass
+    if upper.startswith("MAX("):
+        field = expr[4:-1].strip()
+        vals = [r.get(field) for r in rows if r.get(field) is not None]
+        return max(vals) if vals else None
 
-    if not values:
-        return None
-
-    if func == "SUM":
-        return sum(values)
-    if func == "AVG":
-        return sum(values) / len(values)
-    if func == "MIN":
-        return min(values)
-    if func == "MAX":
-        return max(values)
+    return None
