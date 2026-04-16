@@ -1,75 +1,87 @@
-"""Core query engine for querypath — handles SELECT, WHERE, ORDER BY, LIMIT."""
-
+"""Core query execution engine for querypath."""
 from typing import Any, Dict, List, Optional
-from querypath.sorter import apply_order_by, apply_limit
+from querypath.joiner import apply_join
 
 
 class QueryEngine:
-    """Executes SQL-like queries against a list of record dicts."""
-
-    def __init__(self, records: List[Dict[str, Any]]):
-        self.records = records
+    def __init__(self, data: List[Dict[str, Any]]):
+        self.data = data
 
     def execute(
         self,
         select: Optional[List[str]] = None,
         where: Optional[Dict[str, Any]] = None,
         order_by: Optional[str] = None,
-        ascending: bool = True,
+        order_dir: str = "asc",
         limit: Optional[int] = None,
-        offset: int = 0,
+        join_data: Optional[List[Dict[str, Any]]] = None,
+        join_left_key: Optional[str] = None,
+        join_right_key: Optional[str] = None,
+        join_type: str = "inner",
+        join_prefix: Optional[str] = None,
     ) -> List[Dict[str, Any]]:
-        """Run a query against the loaded records.
+        rows = list(self.data)
 
-        Args:
-            select: Columns to include; None or ['*'] means all columns.
-            where: Equality filters as {column: value}.
-            order_by: Column name to sort by.
-            ascending: Sort direction.
-            limit: Max rows to return.
-            offset: Rows to skip.
+        if join_data is not None and join_left_key and join_right_key:
+            rows = apply_join(
+                rows,
+                join_data,
+                join_left_key,
+                join_right_key,
+                join_type=join_type,
+                right_prefix=join_prefix,
+            )
 
-        Returns:
-            Filtered, sorted, and sliced list of record dicts.
-        """
-        results = list(self.records)
-
-        # WHERE
         if where:
-            results = self._apply_where(results, where)
+            rows = self._apply_where(rows, where)
 
-        # ORDER BY
-        results = apply_order_by(results, order_by, ascending=ascending)
+        if order_by:
+            from querypath.sorter import apply_order_by
+            rows = apply_order_by(rows, order_by, order_dir)
 
-        # LIMIT / OFFSET
-        results = apply_limit(results, limit=limit, offset=offset)
+        if limit is not None:
+            from querypath.sorter import apply_limit
+            rows = apply_limit(rows, limit)
 
-        # SELECT
-        if select and select != ["*"]:
-            results = self._apply_select(results, select)
+        if select:
+            rows = self._apply_select(rows, select)
 
-        return results
-
-    # ------------------------------------------------------------------
-    # Private helpers
-    # ------------------------------------------------------------------
+        return rows
 
     def _apply_where(
-        self,
-        records: List[Dict[str, Any]],
-        conditions: Dict[str, Any],
+        self, rows: List[Dict[str, Any]], conditions: Dict[str, Any]
     ) -> List[Dict[str, Any]]:
-        """Filter records by equality conditions."""
-        filtered = []
-        for row in records:
-            if all(row.get(col) == val for col, val in conditions.items()):
-                filtered.append(row)
-        return filtered
+        result = []
+        for row in rows:
+            match = True
+            for key, value in conditions.items():
+                if isinstance(value, dict):
+                    op = value.get("op", "eq")
+                    val = value.get("value")
+                    row_val = row.get(key)
+                    if op == "eq" and row_val != val:
+                        match = False
+                    elif op == "ne" and row_val == val:
+                        match = False
+                    elif op == "gt" and not (row_val is not None and row_val > val):
+                        match = False
+                    elif op == "lt" and not (row_val is not None and row_val < val):
+                        match = False
+                    elif op == "gte" and not (row_val is not None and row_val >= val):
+                        match = False
+                    elif op == "lte" and not (row_val is not None and row_val <= val):
+                        match = False
+                    elif op == "contains" and (
+                        row_val is None or str(val).lower() not in str(row_val).lower()
+                    ):
+                        match = False
+                elif row.get(key) != value:
+                    match = False
+            if match:
+                result.append(row)
+        return result
 
     def _apply_select(
-        self,
-        records: List[Dict[str, Any]],
-        columns: List[str],
+        self, rows: List[Dict[str, Any]], columns: List[str]
     ) -> List[Dict[str, Any]]:
-        """Project only the requested columns."""
-        return [{col: row.get(col) for col in columns} for row in records]
+        return [{col: row.get(col) for col in columns} for row in rows]

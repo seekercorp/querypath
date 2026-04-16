@@ -1,3 +1,4 @@
+"""CLI entry point for querypath."""
 import argparse
 import json
 import sys
@@ -5,57 +6,55 @@ from pathlib import Path
 
 from querypath.readers import get_reader
 from querypath.query_engine import QueryEngine
+from querypath.formatter import format_output
 
 
-def format_output(results, fmt="table"):
-    if not results:
-        print("No results.")
-        return
-
-    if fmt == "json":
-        print(json.dumps(results, indent=2))
-        return
-
-    # Table format
-    keys = list(results[0].keys())
-    col_widths = {k: max(len(k), max(len(str(row.get(k, ""))) for row in results)) for k in keys}
-
-    header = "  ".join(k.ljust(col_widths[k]) for k in keys)
-    separator = "  ".join("-" * col_widths[k] for k in keys)
-    print(header)
-    print(separator)
-    for row in results:
-        print("  ".join(str(row.get(k, "")).ljust(col_widths[k]) for k in keys))
+def _load_file(path: str):
+    suffix = Path(path).suffix.lstrip(".")
+    reader = get_reader(suffix)(path)
+    return reader.read()
 
 
-def main():
+def main(argv=None):
     parser = argparse.ArgumentParser(
-        description="Run SQL-like queries against JSON, CSV, or YAML files."
+        prog="querypath",
+        description="Run SQL-like queries against JSON, CSV, and YAML files.",
     )
-    parser.add_argument("file", help="Path to the data file (json, csv, yaml/yml)")
-    parser.add_argument("query", help="SQL-like query string, e.g. \"SELECT * FROM data\"")
-    parser.add_argument(
-        "--format",
-        choices=["table", "json"],
-        default="table",
-        help="Output format (default: table)",
-    )
+    parser.add_argument("file", help="Path to the input file")
+    parser.add_argument("--select", nargs="+", metavar="COL", help="Columns to select")
+    parser.add_argument("--where", type=json.loads, metavar="JSON", help="Where conditions as JSON")
+    parser.add_argument("--order-by", dest="order_by", metavar="COL")
+    parser.add_argument("--order-dir", dest="order_dir", default="asc", choices=["asc", "desc"])
+    parser.add_argument("--limit", type=int)
+    parser.add_argument("--format", dest="fmt", default="table", choices=["table", "json", "csv"])
+    parser.add_argument("--join", metavar="FILE", help="File to join with")
+    parser.add_argument("--join-left-key", dest="join_left_key", metavar="COL")
+    parser.add_argument("--join-right-key", dest="join_right_key", metavar="COL")
+    parser.add_argument("--join-type", dest="join_type", default="inner", choices=["inner", "left"])
+    parser.add_argument("--join-prefix", dest="join_prefix", metavar="PREFIX")
 
-    args = parser.parse_args()
-    file_path = Path(args.file)
-
-    if not file_path.exists():
-        print(f"Error: file '{file_path}' not found.", file=sys.stderr)
-        sys.exit(1)
+    args = parser.parse_args(argv)
 
     try:
-        reader = get_reader(str(file_path))
-        records = reader.read()
-        engine = QueryEngine(records)
-        results = engine.execute(args.query)
-        format_output(results, fmt=args.format)
-    except ValueError as e:
-        print(f"Error: {e}", file=sys.stderr)
+        data = _load_file(args.file)
+        join_data = _load_file(args.join) if args.join else None
+
+        engine = QueryEngine(data)
+        results = engine.execute(
+            select=args.select,
+            where=args.where,
+            order_by=args.order_by,
+            order_dir=args.order_dir,
+            limit=args.limit,
+            join_data=join_data,
+            join_left_key=args.join_left_key,
+            join_right_key=args.join_right_key,
+            join_type=args.join_type,
+            join_prefix=args.join_prefix,
+        )
+        print(format_output(results, fmt=args.fmt))
+    except Exception as exc:  # pylint: disable=broad-except
+        print(f"Error: {exc}", file=sys.stderr)
         sys.exit(1)
 
 
