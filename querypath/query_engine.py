@@ -1,9 +1,12 @@
-"""Core query engine for querypath."""
+"""Core query engine for querypath — handles SELECT, WHERE, ORDER BY, LIMIT."""
+
 from typing import Any, Dict, List, Optional
-from querypath.aggregator import apply_aggregation
+from querypath.sorter import apply_order_by, apply_limit
 
 
 class QueryEngine:
+    """Executes SQL-like queries against a list of record dicts."""
+
     def __init__(self, records: List[Dict[str, Any]]):
         self.records = records
 
@@ -12,63 +15,61 @@ class QueryEngine:
         select: Optional[List[str]] = None,
         where: Optional[Dict[str, Any]] = None,
         order_by: Optional[str] = None,
+        ascending: bool = True,
         limit: Optional[int] = None,
-        agg_func: Optional[str] = None,
-        agg_field: Optional[str] = None,
-        group_by: Optional[str] = None,
+        offset: int = 0,
     ) -> List[Dict[str, Any]]:
+        """Run a query against the loaded records.
+
+        Args:
+            select: Columns to include; None or ['*'] means all columns.
+            where: Equality filters as {column: value}.
+            order_by: Column name to sort by.
+            ascending: Sort direction.
+            limit: Max rows to return.
+            offset: Rows to skip.
+
+        Returns:
+            Filtered, sorted, and sliced list of record dicts.
+        """
         results = list(self.records)
 
+        # WHERE
         if where:
             results = self._apply_where(results, where)
 
-        if agg_func:
-            return apply_aggregation(results, agg_func, agg_field, group_by)
+        # ORDER BY
+        results = apply_order_by(results, order_by, ascending=ascending)
 
+        # LIMIT / OFFSET
+        results = apply_limit(results, limit=limit, offset=offset)
+
+        # SELECT
         if select and select != ["*"]:
-            results = [{col: row.get(col) for col in select} for row in results]
-
-        if order_by:
-            reverse = False
-            field = order_by
-            if order_by.upper().endswith(" DESC"):
-                field = order_by[:-5].strip()
-                reverse = True
-            elif order_by.upper().endswith(" ASC"):
-                field = order_by[:-4].strip()
-            results = sorted(results, key=lambda r: (r.get(field) is None, r.get(field)), reverse=reverse)
-
-        if limit is not None:
-            results = results[:limit]
+            results = self._apply_select(results, select)
 
         return results
 
+    # ------------------------------------------------------------------
+    # Private helpers
+    # ------------------------------------------------------------------
+
     def _apply_where(
-        self, records: List[Dict[str, Any]], where: Dict[str, Any]
+        self,
+        records: List[Dict[str, Any]],
+        conditions: Dict[str, Any],
     ) -> List[Dict[str, Any]]:
+        """Filter records by equality conditions."""
         filtered = []
-        for record in records:
-            match = True
-            for key, condition in where.items():
-                value = record.get(key)
-                if isinstance(condition, dict):
-                    op = list(condition.keys())[0]
-                    cond_val = condition[op]
-                    if op == "gt" and not (value is not None and value > cond_val):
-                        match = False
-                    elif op == "lt" and not (value is not None and value < cond_val):
-                        match = False
-                    elif op == "gte" and not (value is not None and value >= cond_val):
-                        match = False
-                    elif op == "lte" and not (value is not None and value <= cond_val):
-                        match = False
-                    elif op == "ne" and not (value != cond_val):
-                        match = False
-                    elif op == "contains" and not (isinstance(value, str) and cond_val in value):
-                        match = False
-                else:
-                    if value != condition:
-                        match = False
-            if match:
-                filtered.append(record)
+        for row in records:
+            if all(row.get(col) == val for col, val in conditions.items()):
+                filtered.append(row)
         return filtered
+
+    def _apply_select(
+        self,
+        records: List[Dict[str, Any]],
+        columns: List[str],
+    ) -> List[Dict[str, Any]]:
+        """Project only the requested columns."""
+        return [{col: row.get(col) for col in columns} for row in records]
