@@ -1,19 +1,24 @@
+"""Reader registry — returns the appropriate reader for a given file path."""
+from pathlib import Path
+
 from .json_reader import JsonReader
 from .csv_reader import CsvReader
 from .yaml_reader import YamlReader
+from .ndjson_reader import NdJsonReader
 
-READER_MAP = {
+_EXTENSION_MAP = {
     ".json": JsonReader,
     ".csv": CsvReader,
     ".yaml": YamlReader,
     ".yml": YamlReader,
+    ".ndjson": NdJsonReader,
+    ".jsonl": NdJsonReader,
 }
 
 
-def get_reader(file_path: str):
-    """Return the appropriate reader instance based on file extension."""
-    import os
-    ext = os.path.splitext(file_path)[-1].lower()
-    if ext not in READER_MAP:
-        raise ValueError(f"Unsupported file type: '{ext}'. Supported types: {list(READER_MAP.keys())}")
-    return READER_MAP[ext](file_path)
+def get_reader(path: str):
+    ext = Path(path).suffix.lower()
+    cls = _EXTENSION_MAP.get(ext)
+    if cls is None:
+        raise ValueError(f"Unsupported file extension: '{ext}'")
+    return cls(path)
