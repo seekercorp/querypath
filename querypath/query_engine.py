@@ -1,72 +1,74 @@
-import re
-from typing import Any, List, Dict, Optional
+"""Core query engine for querypath."""
+from typing import Any, Dict, List, Optional
+from querypath.aggregator import apply_aggregation
 
 
 class QueryEngine:
-    """
-    Executes simple SQL-like queries against a list of records (dicts).
-    Supported syntax: SELECT col1, col2 FROM data [WHERE col op value] [LIMIT n]
-    """
-
     def __init__(self, records: List[Dict[str, Any]]):
         self.records = records
 
-    def execute(self, query: str) -> List[Dict[str, Any]]:
-        query = query.strip().rstrip(";")
-        select_match = re.match(
-            r"SELECT\s+(.+?)\s+FROM\s+\w+(\s+WHERE\s+(.+?))?(\s+LIMIT\s+(\d+))?$",
-            query,
-            re.IGNORECASE,
-        )
-        if not select_match:
-            raise ValueError(f"Unsupported or malformed query: {query}")
+    def execute(
+        self,
+        select: Optional[List[str]] = None,
+        where: Optional[Dict[str, Any]] = None,
+        order_by: Optional[str] = None,
+        limit: Optional[int] = None,
+        agg_func: Optional[str] = None,
+        agg_field: Optional[str] = None,
+        group_by: Optional[str] = None,
+    ) -> List[Dict[str, Any]]:
+        results = list(self.records)
 
-        columns_str = select_match.group(1).strip()
-        where_clause = select_match.group(3)
-        limit_str = select_match.group(5)
+        if where:
+            results = self._apply_where(results, where)
 
-        results = self.records
+        if agg_func:
+            return apply_aggregation(results, agg_func, agg_field, group_by)
 
-        if where_clause:
-            results = self._apply_where(results, where_clause.strip())
+        if select and select != ["*"]:
+            results = [{col: row.get(col) for col in select} for row in results]
 
-        if columns_str != "*":
-            cols = [c.strip() for c in columns_str.split(",")]
-            results = [{col: row.get(col) for col in cols} for row in results]
+        if order_by:
+            reverse = False
+            field = order_by
+            if order_by.upper().endswith(" DESC"):
+                field = order_by[:-5].strip()
+                reverse = True
+            elif order_by.upper().endswith(" ASC"):
+                field = order_by[:-4].strip()
+            results = sorted(results, key=lambda r: (r.get(field) is None, r.get(field)), reverse=reverse)
 
-        if limit_str:
-            results = results[: int(limit_str)]
+        if limit is not None:
+            results = results[:limit]
 
         return results
 
-    def _apply_where(self, records: List[Dict], clause: str) -> List[Dict]:
-        pattern = re.match(r"(\w+)\s*(=|!=|>=|<=|>|<)\s*(.+)", clause)
-        if not pattern:
-            raise ValueError(f"Invalid WHERE clause: {clause}")
-
-        col, op, raw_val = pattern.group(1), pattern.group(2), pattern.group(3).strip()
-
-        # Strip quotes for string values
-        if (raw_val.startswith("'") and raw_val.endswith("'")) or (
-            raw_val.startswith('"') and raw_val.endswith('"')
-        ):
-            value: Any = raw_val[1:-1]
-        else:
-            try:
-                value = int(raw_val)
-            except ValueError:
-                try:
-                    value = float(raw_val)
-                except ValueError:
-                    value = raw_val
-
-        ops = {
-            "=": lambda a, b: a == b,
-            "!=": lambda a, b: a != b,
-            ">": lambda a, b: a is not None and a > b,
-            ">=": lambda a, b: a is not None and a >= b,
-            "<": lambda a, b: a is not None and a < b,
-            "<=": lambda a, b: a is not None and a <= b,
-        }
-        fn = ops[op]
-        return [row for row in records if fn(row.get(col), value)]
+    def _apply_where(
+        self, records: List[Dict[str, Any]], where: Dict[str, Any]
+    ) -> List[Dict[str, Any]]:
+        filtered = []
+        for record in records:
+            match = True
+            for key, condition in where.items():
+                value = record.get(key)
+                if isinstance(condition, dict):
+                    op = list(condition.keys())[0]
+                    cond_val = condition[op]
+                    if op == "gt" and not (value is not None and value > cond_val):
+                        match = False
+                    elif op == "lt" and not (value is not None and value < cond_val):
+                        match = False
+                    elif op == "gte" and not (value is not None and value >= cond_val):
+                        match = False
+                    elif op == "lte" and not (value is not None and value <= cond_val):
+                        match = False
+                    elif op == "ne" and not (value != cond_val):
+                        match = False
+                    elif op == "contains" and not (isinstance(value, str) and cond_val in value):
+                        match = False
+                else:
+                    if value != condition:
+                        match = False
+            if match:
+                filtered.append(record)
+        return filtered
