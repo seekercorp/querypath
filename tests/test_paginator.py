@@ -62,6 +62,10 @@ def test_apply_pagination_none_returns_all():
     assert apply_pagination(ROWS) == ROWS
 
 
+def test_apply_pagination_empty_rows():
+    assert apply_pagination([], limit=5, offset=2) == []
+
+
 def test_parse_pagination_spec_both():
     spec = parse_pagination_spec({"limit": 10, "offset": 5})
     assert spec == {"limit": 10, "offset": 5}
@@ -85,3 +89,13 @@ def test_parse_pagination_spec_invalid_limit():
 def test_parse_pagination_spec_invalid_offset():
     with pytest.raises(ValueError, match="Invalid offset"):
         parse_pagination_spec({"offset": [1, 2]})
+
+
+def test_parse_pagination_spec_only_limit():
+    spec = parse_pagination_spec({"limit": 5})
+    assert spec == {"limit": 5, "offset": None}
+
+
+def test_parse_pagination_spec_only_offset():
+    spec = parse_pagination_spec({"offset": 2})
+    assert spec == {"limit": None, "offset": 2}
