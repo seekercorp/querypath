@@ -34,7 +34,12 @@ def apply_cast(rows: list[dict], column: str, type_name: str) -> list[dict]:
     for row in rows:
         row = dict(row)
         if column in row:
-            row[column] = cast_value(row[column], type_name)
+            try:
+                row[column] = cast_value(row[column], type_name)
+            except (ValueError, TypeError) as e:
+                raise ValueError(
+                    f"Failed to cast column {column!r} value {row[column]!r} to {type_name!r}: {e}"
+                ) from e
         out.append(row)
     return out
 
